@@ -23,6 +23,62 @@ app = FastAPI(
 fetcher = StockDataFetcher()
 
 
+@app.get("/")
+async def root():
+    """
+    API 根路径，返回简单的欢迎信息和指南链接
+    """
+    return {
+        "message": "Welcome to Stock Data API for AI Agents",
+        "guide_url": "/api/ai_guide",
+        "docs_url": "/docs"
+    }
+
+
+@app.get("/api/ai_guide")
+async def get_ai_guide():
+    """
+    为AI智能体提供API使用指南，描述所有可用端点及其功能
+    """
+    return {
+        "description": "本API专为AI智能体设计，提供A股市场实时数据与分析。",
+        "endpoints": [
+            {
+                "path": "/api/stock/info",
+                "method": "GET",
+                "description": "获取股票基本信息（名称、行业、市值等）",
+                "params": {"code": "股票代码，如 600000"}
+            },
+            {
+                "path": "/api/stock/price",
+                "method": "GET",
+                "description": "获取实时行情，包含MACD、KDJ等技术指标",
+                "params": {
+                    "code": "股票代码",
+                    "detail": "true (返回详细技术指标和资金流向数据)"
+                }
+            },
+            {
+                "path": "/api/stock/kline",
+                "method": "GET",
+                "description": "获取历史K线数据",
+                "params": {
+                    "code": "股票代码",
+                    "period": "daily/weekly/monthly",
+                    "adjust": "qfq (前复权) / hfq (后复权)"
+                }
+            },
+            {
+                "path": "/api/stock/news",
+                "method": "GET",
+                "description": "获取个股相关新闻",
+                "params": {"code": "股票代码"}
+            }
+        ],
+        "usage_tips": "对于深度分析，请在 /api/stock/price 中设置 detail=true 以获取 MACD、筹码分布和资金流向数据。"
+    }
+
+
 @app.get("/api/stock/info")
 async def get_stock_info(code: str = Query(..., description="股票代码，例如：600000")) -> dict:
     """
@@ -46,22 +102,39 @@ async def get_stock_info(code: str = Query(..., description="股票代码，例�
 
 
 @app.get("/api/stock/price")
-async def get_stock_price(code: str = Query(..., description="股票代码")) -> dict:
+async def get_stock_price(
+    code: str = Query(..., description="股票代码"),
+    detail: bool = Query(True, description="是否包含详细技术指标")
+) -> dict:
     """
-    获取股票实时价格
-    
-    Args:
-        code: 股票代码
-        
-    Returns:
-        包含价格信息的JSON
+    获取股票全行情（实时+技术+资金）
     """
     try:
-        data = fetcher.get_stock_price(code)
+        # 1. 基础行情
+        price_data = fetcher.get_stock_price(code)
+        
+        # 2. 如果不需要详情，直接返回
+        if not detail:
+            return {
+                "status": "success",
+                "data": price_data,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+        # 3. 补充技术指标与资金数据
+        indicator_data = fetcher.get_stock_indicators(code)
+        
+        # 合并数据
+        full_data = {**price_data, **indicator_data}
+        
         return {
             "status": "success",
-            "data": data,
-            "timestamp": datetime.now().isoformat()
+            "data": full_data,
+            "meta": {
+                "timestamp": datetime.now().timestamp(),
+                "source": "akshare_em",
+                "version": "2.0"
+            }
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
