@@ -27,11 +27,33 @@ class StockDataFetcher:
         self.stock_df = None
         self.last_update = None
         
+        # 简单的内存缓存 {code: {"data": ..., "expire_at": timestamp}}
+        self.cache = {}
+        self.CACHE_DURATION = 300  # 缓存有效期5分钟
+        
         # 初始化加载股票列表
         if AKSHARE_AVAILABLE:
             self._load_stock_list()
         else:
             self._load_fallback_stocks()
+
+    def _get_from_cache(self, code: str, data_type: str = "price"):
+        """尝试从缓存获取数据"""
+        cache_key = f"{code}_{data_type}"
+        if cache_key in self.cache:
+            item = self.cache[cache_key]
+            if datetime.now().timestamp() < item["expire_at"]:
+                print(f"⚡ 缓存命中: {code} [{data_type}]")
+                return item["data"]
+        return None
+
+    def _save_to_cache(self, code: str, data: Any, data_type: str = "price"):
+        """保存数据到缓存"""
+        cache_key = f"{code}_{data_type}"
+        self.cache[cache_key] = {
+            "data": data,
+            "expire_at": datetime.now().timestamp() + self.CACHE_DURATION
+        }
     
     def _load_stock_list(self):
         """从akshare加载全A股股票列表（使用东方财富接口，更稳定）"""
@@ -168,7 +190,13 @@ class StockDataFetcher:
     def get_stock_indicators(self, code: str) -> Dict[str, Any]:
         """
         获取技术指标（MACD, MA, RPS等）
+        启用内存缓存，有效期5分钟
         """
+        # 尝试读取缓存
+        cached_data = self._get_from_cache(code, "indicators")
+        if cached_data:
+            return cached_data
+
         pure_code = code[-6:] if len(code) > 6 else code
         
         try:
@@ -253,7 +281,7 @@ class StockDataFetcher:
             def safe_float(val):
                 return float(val) if pd.notna(val) else 0.0
 
-            return {
+            result = {
                 "indicators": {
                     "ma": {
                         "ma5": safe_float(last_row['ma5']),
@@ -278,6 +306,10 @@ class StockDataFetcher:
                     "definition": "特大单(>100W), 大单(20-100W), 中单(4-20W), 小单(<4W)"
                 }
             }
+            
+            # 存入缓存
+            self._save_to_cache(code, result, "indicators")
+            return result
             
         except Exception as e:
             print(f"指标计算失败: {e}")
