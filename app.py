@@ -55,7 +55,8 @@ async def get_ai_guide():
                 "description": "获取实时行情，包含MACD、KDJ等技术指标",
                 "params": {
                     "code": "股票代码",
-                    "detail": "true (返回详细技术指标和资金流向数据)"
+                    "detail": "true (返回详细技术指标和资金流向数据)",
+                    "include_intraday": "true (返回最近5分钟级别K线序列，用于分析尾盘急拉等微观逻辑)"
                 }
             },
             {
@@ -104,36 +105,44 @@ async def get_stock_info(code: str = Query(..., description="股票代码，例�
 @app.get("/api/stock/price")
 async def get_stock_price(
     code: str = Query(..., description="股票代码"),
-    detail: bool = Query(True, description="是否包含详细技术指标")
+    detail: bool = Query(True, description="是否包含详细技术指标"),
+    include_intraday: bool = Query(False, description="是否包含分时图数据(5分钟K线)")
 ) -> dict:
     """
-    获取股票全行情（实时+技术+资金）
+    获取股票全行情（实时+技术+资金+分时）
     """
     try:
         # 1. 基础行情
         price_data = fetcher.get_stock_price(code)
         
         # 2. 如果不需要详情，直接返回
-        if not detail:
+        if not detail and not include_intraday:
             return {
                 "status": "success",
                 "data": price_data,
                 "timestamp": datetime.now().isoformat()
             }
             
+        full_data = list(price_data.items())
+        
         # 3. 补充技术指标与资金数据
-        indicator_data = fetcher.get_stock_indicators(code)
+        if detail:
+            indicator_data = fetcher.get_stock_indicators(code)
+            full_data.extend(indicator_data.items())
+            
+        # 4. 补充微观分时数据 (用于判断尾盘急拉等)
+        if include_intraday:
+            intraday_data = fetcher.get_stock_intraday(code)
+            full_data.append(("intraday", intraday_data))
         
         # 合并数据
-        full_data = {**price_data, **indicator_data}
-        
         return {
             "status": "success",
-            "data": full_data,
+            "data": dict(full_data),
             "meta": {
                 "timestamp": datetime.now().timestamp(),
                 "source": "akshare_em",
-                "version": "2.0"
+                "version": "2.1"
             }
         }
     except Exception as e:

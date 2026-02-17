@@ -187,6 +187,53 @@ class StockDataFetcher:
         
         return {}
         
+    def get_stock_intraday(self, code: str) -> List[Dict[str, Any]]:
+        """
+        获取股票分时数据 (最近的5分钟K线序列)
+        用于AI分析由分时图体现的微观逻辑（如尾盘急拉、洗盘等）
+        """
+        cached_data = self._get_from_cache(code, "intraday")
+        if cached_data:
+            return cached_data
+
+        pure_code = code[-6:] if len(code) > 6 else code
+        
+        if AKSHARE_AVAILABLE:
+            try:
+                # 获取最近的5分钟级别K线
+                df = ak.stock_zh_a_hist_min_em(symbol=pure_code, period="5", adjust="qfq")
+                
+                if df is None or len(df) == 0:
+                    return []
+                
+                # 取最近 24 个点 (约2小时数据)，足以判断尾盘行为
+                recent_df = df.tail(24).copy()
+                
+                # 重命名并转换格式
+                data_list = []
+                for _, row in recent_df.iterrows():
+                    data_list.append({
+                        "time": str(row['时间']),
+                        "open": float(row['开盘']),
+                        "close": float(row['收盘']),
+                        "high": float(row['最高']),
+                        "low": float(row['最低']),
+                        "volume": int(row['成交量'])
+                    })
+                
+                # 存入短时缓存 (1分钟)
+                # 注意：这里为了简单复用现有缓存逻辑，过期时间可能需要缩短
+                # 但 data_fetcher current CACHE_DURATION 是 300s (5min)
+                # 对于分时数据，5分钟缓存其实略久，但对于AI分析历史/收盘后数据是可以接受的
+                # 盘中实时性要求高的话，最好缩短缓存时间。这里暂时复用。
+                self._save_to_cache(code, data_list, "intraday")
+                
+                return data_list
+            except Exception as e:
+                print(f"获取分时数据失败: {e}")
+                
+        return []
+
     def get_stock_indicators(self, code: str) -> Dict[str, Any]:
         """
         获取技术指标（MACD, MA, RPS等）
