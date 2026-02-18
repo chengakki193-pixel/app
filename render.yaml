@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: stock-data-api
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: main
+    healthCheckPath: /api/health
+    # 因为使用 Docker，它会自动读取 EXPOSE 8000
+    # 并且 Render 会自动注入 PORT 环境变量

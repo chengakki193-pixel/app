@@ -1,0 +1,9 @@
+@echo off
+echo Starting RPS Service (Port 8888)...
+start "RPS Service" python rps_service/rps_app.py
+
+echo Waiting for 5 seconds...
+timeout /t 5
+
+echo Starting Main API (Port 8000)...
+uvicorn app:app --reload --port 8000
