@@ -271,11 +271,15 @@ async def root():
 
 
 if __name__ == "__main__":
+    import os
+    # 获取环境变量中的端口，Render 会自动注入 PORT 变量
+    # 如果本地运行则默认使用 8000
+    port = int(os.environ.get("PORT", 8000))
+    
     # 启动服务器
-    # 生产环境可用: gunicorn -w 4 -b 0.0.0.0:8000 app:app
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=8000,
+        port=port,
         log_level="info"
     )
