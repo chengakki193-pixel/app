@@ -74,6 +74,24 @@ async def get_ai_guide():
                 "method": "GET",
                 "description": "获取个股相关新闻",
                 "params": {"code": "股票代码"}
+            },
+            {
+                "path": "/api/rps/top/50",
+                "method": "GET",
+                "description": "获取 RPS 50日线排名前10%的强势股列表",
+                "params": {}
+            },
+            {
+                "path": "/api/rps/top/120",
+                "method": "GET",
+                "description": "获取 RPS 120日线排名前10%的强势股列表 (中期最强)",
+                "params": {}
+            },
+            {
+                "path": "/api/rps/top/250",
+                "method": "GET",
+                "description": "获取 RPS 250日线排名前10%的强势股列表 (长期牛股)",
+                "params": {}
             }
         ],
         "usage_tips": "对于深度分析，请在 /api/stock/price 中设置 detail=true 以获取 MACD、筹码分布和资金流向数据。"
@@ -239,6 +257,35 @@ async def get_market_stats() -> dict:
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/rps/top/{period}")
+async def get_rps_top(
+    period: int,
+    limit: int = Query(100, description="返回数量 restriction")
+) -> dict:
+    """
+    获取指定周期的 RPS Top 榜单 (50, 120, 250)
+    """
+    if period not in [50, 120, 250]:
+        raise HTTPException(status_code=400, detail="Period must be 50, 120, or 250")
+        
+    try:
+        # 获取榜单数据
+        data = fetcher.get_rps_top_list(period)
+        
+        # 截取指定数量
+        result_data = data[:limit] if data else []
+        
+        return {
+            "status": "success",
+            "period": period,
+            "count": len(result_data),
+            "data": result_data,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/health")

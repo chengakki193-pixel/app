@@ -43,11 +43,23 @@ class StockDataFetcher:
         self.market_spot_time = 0
         
         # RPS 数据源配置
+        # 优先读取本地文件（如果 GitHub Actions 已经将数据 push 回仓库，Render 部署时本地会有文件）
+        # 其次读取 GitHub Raw（用于本地开发或文件未更新时）
         self.RPS_DATA_URLS = {
-            "all": "https://raw.githubusercontent.com/chengakki193-pixel/rps-checker/main/output/latest_rps.json",
-            "top": "https://raw.githubusercontent.com/chengakki193-pixel/rps-checker/main/output/top_rps.json"
+            "all": "https://raw.githubusercontent.com/chengakki193-pixel/app/main/output/latest_rps.json",
+            "top": "https://raw.githubusercontent.com/chengakki193-pixel/app/main/output/top_rps.json"
         }
+        
+        # 本地路径配置
+        self.LOCAL_RPS_FILES = {
+            "all": os.path.join("output", "latest_rps.json"),
+            "top": os.path.join("output", "top_rps.json")
+        }
+        
         self.rps_data = {} # 存储全量RPS数据 {code: {...}}
+        self.rps_top_data = {} # 存储Top榜单 { "top_50": [...], ... }
+        self.rps_cache_time = 0 
+        self.RPS_CACHE_DURATION = 3600 # RPS数据缓存1小时
         self.rps_cache_time = 0 
         self.RPS_CACHE_DURATION = 3600 # RPS数据缓存1小时
         
@@ -126,37 +138,84 @@ class StockDataFetcher:
         print(f"✓ 加载了 {len(self.stock_list)} 只备用股票")
 
     def _load_rps_data(self):
-        """从GitHub加载RPS数据"""
+        """从GitHub或本地加载RPS数据"""
+        import os
+        import json
+        
         try:
             current_time = datetime.now().timestamp()
             # 如果缓存未过期且有数据，则不更新
             if self.rps_data and (current_time - self.rps_cache_time < self.RPS_CACHE_DURATION):
                 return
 
-            print("正在更新RPS排位数据...")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 正在更新RPS排位数据...")
+            new_rps_data = {}
+            new_top_data = {}
             
-            # 1. 加载全量数据
-            resp_all = requests.get(self.RPS_DATA_URLS["all"], timeout=10)
-            if resp_all.status_code == 200:
-                data_list = resp_all.json()
-                # 转换为字典以便快速查找 {code: data}
-                new_rps_data = {}
+            # --- 1. 加载全量数据 (优先远端，失败则读取本地) ---
+            loaded_all = False
+            try:
+                # 尝试从 GitHub Raw 获取
+                print(f"  - 尝试从 GitHub 下载: {self.RPS_DATA_URLS['all']} ...")
+                resp_all = requests.get(self.RPS_DATA_URLS["all"], timeout=15)
+                if resp_all.status_code == 200:
+                    data_list = resp_all.json()
+                    loaded_all = True
+                    print(f"    ✓ GitHub 下载成功 ({len(data_list)} 条)")
+                else:
+                    print(f"    ⚠ GitHub下载失败: {resp_all.status_code}")
+            except Exception as e:
+                print(f"    ⚠ GitHub请求异常: {e}")
+            
+            # 如果远端失败，尝试本地读取
+            if not loaded_all:
+                local_path = self.LOCAL_RPS_FILES["all"]
+                if os.path.exists(local_path):
+                    print(f"  - 尝试读取本地文件: {local_path} ...")
+                    with open(local_path, "r", encoding="utf-8") as f:
+                        data_list = json.load(f)
+                    loaded_all = True
+                    print(f"    ✓ 本地读取成功 ({len(data_list)} 条)")
+                else:
+                    print("    × 本地文件不存在")
+
+            # 处理全量数据
+            if loaded_all and data_list:
                 for item in data_list:
                     code = str(item.get("code"))
                     if code:
                         new_rps_data[code] = item
-                
                 self.rps_data = new_rps_data
+
+            # --- 2. 加载 Top 榜单数据 ---
+            # 同样逻辑：远端 -> 本地
+            loaded_top = False
+            try:
+                resp_top = requests.get(self.RPS_DATA_URLS["top"], timeout=15)
+                if resp_top.status_code == 200:
+                    new_top_data = resp_top.json()
+                    loaded_top = True
+            except:
+                pass
+            
+            if not loaded_top:
+                local_top_path = self.LOCAL_RPS_FILES["top"]
+                if os.path.exists(local_top_path):
+                    with open(local_top_path, "r", encoding="utf-8") as f:
+                        new_top_data = json.load(f)
+                        loaded_top = True
+            
+            if loaded_top:
+                self.rps_top_data = new_top_data
+                print(f"    ✓ Top榜单加载成功")
+
+            if loaded_all or loaded_top:
                 self.rps_cache_time = current_time
-                print(f"✓ 成功加载RPS数据: {len(self.rps_data)} 条记录")
-            else:
-                print(f"⚠ RPS数据加载失败: {resp_all.status_code}")
-                
-            # 2. 也可以加载Top数据备用（如果后续有接口需要）
-            # 目前主要使用全量数据进行个股查询
                 
         except Exception as e:
-            print(f"⚠ 加载RPS数据异常: {e}")
+            print(f"⚠ 加载RPS数据全局异常: {e}")
+            import traceback
+            traceback.print_exc()
 
     def get_rps_value(self, code: str) -> Dict[str, Any]:
         """获取单个股票的RPS数据"""
@@ -166,6 +225,18 @@ class StockDataFetcher:
             
         pure_code = code[-6:] if len(code) > 6 else code
         return self.rps_data.get(pure_code, {})
+
+    def get_rps_top_list(self, period: int = 50) -> List[Dict]:
+        """
+        获取 RPS 指定周期的 Top 榜单 (如 50, 120, 250)
+        返回 Rps_top.json 中的缓存数据
+        """
+        # 懒加载
+        if not self.rps_top_data or (datetime.now().timestamp() - self.rps_cache_time > self.RPS_CACHE_DURATION):
+            self._load_rps_data()
+            
+        key = f"top_{period}"
+        return self.rps_top_data.get(key, [])
 
     def _is_trading_time(self) -> bool:
         """
