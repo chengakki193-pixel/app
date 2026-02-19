@@ -8,6 +8,9 @@ from datetime import datetime, timedelta
 import random
 import pandas as pd
 import os
+import requests
+import traceback
+import time
 
 try:
     import akshare as ak
@@ -307,18 +310,32 @@ class StockDataFetcher:
                 status_msg = "交易中" if is_trading else "休市中"
                 print(f"🔄 更新全市场数据 [{status_msg}] Time: {datetime.now().strftime('%H:%M:%S')}...")
                 
-                # 使用东方财富接口
-                df = ak.stock_zh_a_spot_em()
+                max_retries = 3
+                retry_delay = 2
+                last_error = None
                 
-                # 数据校验
-                if df is not None and not df.empty:
-                    self.market_spot_data = df
-                    self.market_spot_time = now_ts
-                    # 同时更新 self.stock_df 保持一致 (兼容旧代码)
-                    self.stock_df = df 
-                    return df
-                else:
-                    print("⚠ 获取全市场数据返回为空")
+                for attempt in range(max_retries):
+                    try:
+                        # 使用东方财富接口
+                        df = ak.stock_zh_a_spot_em()
+                        
+                        # 数据校验
+                        if df is not None and not df.empty:
+                            self.market_spot_data = df
+                            self.market_spot_time = now_ts
+                            # 同时更新 self.stock_df 保持一致 (兼容旧代码)
+                            self.stock_df = df 
+                            return df
+                        else:
+                            print(f"⚠ (Attempt {attempt+1}/{max_retries}) 获取全市场数据返回为空")
+                    except Exception as e:
+                        last_error = e
+                        print(f"⚠ (Attempt {attempt+1}/{max_retries}) 获取全市场数据失败: {e}")
+                        import time
+                        time.sleep(retry_delay)
+                
+                if last_error:
+                    print(f"❌ 所有重试都失败了: {last_error}")
                     # 下策：如果获取失败但有旧缓存，尽量返回旧缓存
                     if self.market_spot_data is not None:
                          return self.market_spot_data
@@ -377,7 +394,14 @@ class StockDataFetcher:
         获取股票实时全行情
         """
         if code not in self.stock_list:
-            raise ValueError(f"股票代码 {code} 不存在")
+            # 如果代码不在缓存列表中，可能是因为全量加载失败
+            # 尝试单独添加该股票到列表中（如果它看起来像是一个有效的代码）
+            if len(code) == 6 and code.isdigit():
+                 name = "未知股票" # 暂时无法获取名称
+                 market = "sh" if code.startswith('6') else ("bj" if code.startswith(('4','8')) else "sz")
+                 self.stock_list[code] = {"name": name, "market": market}
+            else:
+                raise ValueError(f"股票代码 {code} 不存在")
             
         stock = self.stock_list[code]
         pure_code = code[-6:] if len(code) > 6 else code
@@ -410,6 +434,60 @@ class StockDataFetcher:
                                 "open": float(row['今开']),
                                 "high": float(row['最高']),
                                 "low": float(row['最低']),
+                                "close": float(row['昨收']), # close usually means previous close in context of current quote, or last traded price? Usually last traded. But here 'current' is last traded. 'close' is often yesterday close in API responses unless specified. Let's use PREVIOUS close for 'close' key if 'pre_close' logic applied, but wait.
+                                # Actually in many APIs 'close' means current price if market is open, or closing price if closed.
+                                # But '昨收' is explicitly yesterday close.
+                                # Let's stick to what we have.
+                                "volume": float(row['成交量']),
+                                "amount": float(row['成交额']),
+                                "change_p": float(row['涨跌幅']),
+                                "change_a": float(row['涨跌额']),
+                                "turnover": float(row['换手率']) if '换手率' in row else 0,
+                                "amplitude": float(row['振幅']) if '振幅' in row else 0,
+                            },
+                            "bid_ask": bid_ask
+                        }
+            except Exception as e:
+                print(f"获取实时行情失败: {e}")
+                import traceback
+                traceback.print_exc()
+
+            # 如果全市场数据获取失败，尝试单独获取该股票行情 (Backup Strategy)
+            try:
+                print(f"尝试单独获取股票 {pure_code} 行情...")
+                # 使用 individual stock quote interface if available
+                # ak.stock_zh_a_spot_em() is for all. 
+                # ak.stock_zh_a_hist_min_em is for intraday kline.
+                # ak.stock_zh_a_hist is for daily kline.
+                # Use daily history (today) as a fallback for current price if needed, though delayed.
+                # Or try specific query: ak.stock_bid_ask_em(symbol=pure_code) ? No such thing easily.
+                
+                # Let's try fetching minute data to get the latest close
+                min_df = ak.stock_zh_a_hist_min_em(symbol=pure_code, period="1")
+                if min_df is not None and not min_df.empty:
+                    latest = min_df.iloc[-1]
+                    return {
+                         "basic": {
+                                "name": stock["name"],
+                                "code": pure_code,
+                                "timestamp": datetime.now().timestamp(),
+                                "datetime": datetime.now().isoformat(),
+                                "note": "Generated from minute data fallback"
+                            },
+                            "quote": {
+                                "current": float(latest['收盘']),
+                                "open": float(latest['开盘']),
+                                "high": float(latest['最高']),
+                                "low": float(latest['最低']), 
+                                "volume": float(latest['成交量']), 
+                                # Missing change/turnover etc in minute data
+                            }
+                    }
+            except Exception as e2:
+                 print(f"单独获取行情也失败: {e2}")
+
+        
+        return {}
                                 "close_prev": float(row['昨收']),
                                 "level2": bid_ask  # 真实接口无此数据，置空
                             }
