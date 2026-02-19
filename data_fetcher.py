@@ -7,6 +7,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 import random
 import pandas as pd
+import os
 
 try:
     import akshare as ak
